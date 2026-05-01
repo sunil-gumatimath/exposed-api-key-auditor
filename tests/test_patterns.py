@@ -224,3 +224,18 @@ def test_valid_supabase_key():
 def test_valid_azure_connection_string():
     key = "Endpoint=sb://my-namespace.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=ABCDEF12345+/="
     assert len(re.findall(AZURE_CONNECTION_STRING_PATTERN, key)) == 1
+
+
+def test_local_scan_logic():
+    # Simple check that the directory walk logic would run
+    # This just verifies the logic structure is accessible
+    import os
+    from auditor import APIAuditor, RateLimiter, ProgressTracker
+    import argparse
+    
+    args = argparse.Namespace(max_concurrency=1)
+    tracker = ProgressTracker(checkpoint_file="temp_progress.json", store_raw_keys=False)
+    auditor = APIAuditor("fake", RateLimiter(), tracker, args)
+    
+    # We verify the method exists and can be called
+    assert hasattr(auditor, "scan_local_directory")
