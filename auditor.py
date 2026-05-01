@@ -794,6 +794,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="GitHub API Key Auditor with security, speed, and filtering improvements")
     parser.add_argument("--repo", type=str, default="", help="Specific repository to search (format: owner/repo)")
     parser.add_argument("--extensions", type=str, default="", help="File extensions to search (comma-separated, e.g., py,js,env)")
+    parser.add_argument("--dir", type=str, help="Local directory path to scan (for mode=local)")
     parser.add_argument("--mode", type=str, choices=["code", "commits"], default="code", help="Search mode: code or commits")
     parser.add_argument("--validate", action="store_true", help="Validate found API keys")
     parser.add_argument("--output-format", type=str, choices=["json", "csv", "txt"], default="json", help="Output format")
@@ -867,6 +868,10 @@ async def main() -> None:
             "slack": ("Slack", "xoxb-", SLACK_TOKEN_PATTERN),
             "twilio": ("Twilio", "SK", TWILIO_API_KEY_PATTERN),
             "sendgrid": ("SendGrid", "SG.", SENDGRID_API_KEY_PATTERN),
+    "huggingface": ("HuggingFace", "hf_", HUGGINGFACE_KEY_PATTERN),
+    "cloudflare": ("Cloudflare", "", CLOUDFLARE_TOKEN_PATTERN),
+    "supabase": ("Supabase", "sbp_", SUPABASE_KEY_PATTERN),
+    "azure": ("Azure", "Endpoint=sb", AZURE_CONNECTION_STRING_PATTERN),
         }
         selected = [p.strip().lower() for p in args.providers.split(",") if p.strip()]
 
