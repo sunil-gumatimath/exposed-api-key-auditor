@@ -1,6 +1,6 @@
 # Exposed API Key Auditor
 
-Async Python CLI to scan GitHub code or commit messages for exposed API keys (OpenAI, Anthropic, Google AI, AWS, Stripe, GitHub, Slack, Twilio, SendGrid), with resumable checkpoints, optional validation, safer storage defaults, and **confidence-based severity scoring**.
+Async Python CLI to scan GitHub code or commit messages for exposed API keys (OpenAI, Anthropic, Google AI, AWS, Stripe, GitHub, Slack, Twilio, SendGrid, HuggingFace, Cloudflare, Supabase, Azure), with resumable checkpoints, optional validation, safer storage defaults, and **confidence-based severity scoring**.
 
 ## Features
 
@@ -14,7 +14,11 @@ Async Python CLI to scan GitHub code or commit messages for exposed API keys (Op
   - GitHub (`ghp_...`, `gho_...`, `ghs_...`)
   - Slack (`xoxb-...`, `xoxp-...`, `xoxa-...`, `xoxr-...`)
   - Twilio (`SK...`)
-  - SendGrid (`SG.xxx.yyy`)
+  - SendGrid, HuggingFace, Cloudflare, Supabase, Azure (`SG.xxx.yyy`)
+  - HuggingFace (`hf_...`)
+  - Cloudflare
+  - Supabase (`sbp_...`)
+  - Azure
 - **Confidence-based severity scoring** (CRITICAL/HIGH/MEDIUM/LOW) with tunable threshold
 - Async + bounded concurrency for faster scans.
 - Checkpoint/resume support (`progress.json`).
@@ -129,7 +133,7 @@ python auditor.py --confidence-threshold 70 --providers openai,aws,stripe
 Scan all available providers:
 
 ```bash
-python auditor.py --providers openai,anthropic,google,aws,stripe,github,slack,twilio,sendgrid
+python auditor.py --providers openai,anthropic,google,aws,stripe,github,slack,twilio,sendgrid,huggingface,cloudflare,supabase,azure
 ```
 
 ## Common commands
@@ -169,8 +173,9 @@ python auditor.py --allow-patterns OPENAI_API_KEY,ANTHROPIC_API_KEY --deny-patte
 Core:
 
 - `--repo`: target repository (`owner/repo`), default global search.
-- `--mode`: `code` or `commits` (default `code`).
-- `--providers`: comma-separated providers (`openai,anthropic,google,aws,stripe,github,slack,twilio,sendgrid`).
+- `--dir`: Local directory path to scan (required for local mode).
+- `--mode`: `code`, `commits`, or `local` (default `code`).
+- `--providers`: comma-separated providers (`openai,anthropic,google,aws,stripe,github,slack,twilio,sendgrid,huggingface,cloudflare,supabase,azure`).
 - `--extensions`: comma-separated file extensions (code mode only).
 - `--validate`: validate found keys where supported.
 - `--output-format`: `json`, `csv`, `txt`.

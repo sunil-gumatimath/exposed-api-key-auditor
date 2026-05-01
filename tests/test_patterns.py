@@ -18,6 +18,10 @@ from auditor import (
     SLACK_TOKEN_PATTERN,
     TWILIO_API_KEY_PATTERN,
     SENDGRID_API_KEY_PATTERN,
+    HUGGINGFACE_KEY_PATTERN,
+    CLOUDFLARE_TOKEN_PATTERN,
+    SUPABASE_KEY_PATTERN,
+    AZURE_CONNECTION_STRING_PATTERN,
 )
 
 
@@ -203,3 +207,20 @@ def test_confidence_threshold_filtering(tmp_path):
     score = calculate_confidence_score(key, context, False)
     if score < 80:
         assert auditor.is_probable_secret(key, context) is False
+
+
+def test_valid_huggingface_key():
+    key = "hf_" + "a" * 34
+    assert len(re.findall(HUGGINGFACE_KEY_PATTERN, key)) == 1
+
+def test_valid_cloudflare_token():
+    key = "A" * 40
+    assert len(re.findall(CLOUDFLARE_TOKEN_PATTERN, key)) == 1
+
+def test_valid_supabase_key():
+    key = "sbp_" + "b" * 36
+    assert len(re.findall(SUPABASE_KEY_PATTERN, key)) == 1
+
+def test_valid_azure_connection_string():
+    key = "Endpoint=sb://my-namespace.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=ABCDEF12345+/="
+    assert len(re.findall(AZURE_CONNECTION_STRING_PATTERN, key)) == 1
