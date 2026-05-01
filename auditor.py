@@ -31,9 +31,19 @@ ANTHROPIC_KEY_PATTERN = r"\bsk-ant-[A-Za-z0-9_-]{50,}\b"
 OPENAI_KEY_PATTERN = r"\b(?:sk-[A-Za-z0-9]{48}|sk-(?:live|test)-[A-Za-z0-9]{24,}|sk-proj-[A-Za-z0-9_-]{20,})\b"
 GOOGLE_AI_KEY_PATTERN = r"\bAIza[A-Za-z0-9_-]{35}\b"
 
+# Additional provider patterns
+AWS_ACCESS_KEY_PATTERN = r"\bAKIA[0-9A-Z]{12}\b"
+AWS_SECRET_KEY_PATTERN = r"\b(?i)aws_secret_access_key[\s:=]+['\"]?([A-Za-z0-9/+=]{40})['\"]?\b"
+STRIPE_KEY_PATTERN = r"\bsk_(?:live|test)_[0-9a-zA-Z]{24,}\b"
+GITHUB_TOKEN_PATTERN = r"\bgh[poas]_[0-9a-zA-Z]{36}\b"
+SLACK_TOKEN_PATTERN = r"\bxox[baprs]-[0-9]{10,13}-[0-9]{10,13}-[0-9a-zA-Z]{24,}\b"
+TWILIO_API_KEY_PATTERN = r"\bSK[0-9a-fA-F]{32}\b"
+SENDGRID_API_KEY_PATTERN = r"\bSG\.[0-9a-zA-Z\.\-_]{22}\.[0-9a-zA-Z\.\-_]{43}\b"
+
 DEFAULT_VALIDATION_TIMEOUT = 10
 DEFAULT_MAX_CONCURRENCY = 10
 DEFAULT_CHECKPOINT_INTERVAL = 25
+DEFAULT_CONFIDENCE_THRESHOLD = 50.0
 
 NOISE_SUBSTRINGS = {
     "example",
@@ -88,6 +98,74 @@ def shannon_entropy(value: str) -> float:
         p = count / length
         entropy -= p * math.log2(p)
     return entropy
+
+
+def calculate_char_diversity(value: str) -> float:
+    """Calculate character diversity ratio (unique chars / total chars)."""
+    if not value:
+        return 0.0
+    return len(set(value)) / len(value)
+
+
+def calculate_confidence_score(key: str, context: str, is_noise: bool) -> float:
+    """Calculate confidence score (0-100) for a potential secret.
+    
+    Higher score = more likely to be a real secret.
+    """
+    # Entropy contribution (0-30 points)
+    entropy = shannon_entropy(key)
+    # Normalize: entropy of 4.5+ is excellent, scale to 30 points
+    entropy_score = min(entropy / 4.5, 1.0) * 30.0
+    
+    # Context pattern contribution (0-25 points)
+    # Check for common secret variable names
+    secret_indicators = [
+        r"api[_-]?key", r"secret[_-]?key", r"private[_-]?key",
+        r"access[_-]?key", r"auth[_-]?token", r"bearer[_-]?token",
+        r"password", r"passwd", r"pwd", r"token",
+        r"credential", r"secret", r"apikey",
+    ]
+    context_lower = context.lower()
+    context_matches = sum(1 for pattern in secret_indicators if re.search(pattern, context_lower))
+    context_score = min(context_matches / 2.0, 1.0) * 25.0
+    
+    # Noise filter penalty (0-20 points, full penalty if noise detected)
+    noise_score = 0.0 if is_noise else 20.0
+    
+    # Length contribution (0-15 points)
+    # Longer keys are more likely to be real
+    length = len(key)
+    if length >= 32:
+        length_score = 15.0
+    elif length >= 24:
+        length_score = 12.0
+    elif length >= 16:
+        length_score = 8.0
+    elif length >= 8:
+        length_score = 4.0
+    else:
+        length_score = 1.0
+    
+    # Character diversity contribution (0-10 points)
+    diversity = calculate_char_diversity(key)
+    diversity_score = diversity * 10.0
+    
+    # Total score (sum of all components, max 100)
+    score = entropy_score + context_score + noise_score + length_score + diversity_score
+    
+    return min(max(score, 0.0), 100.0)
+
+
+def get_severity_level(score: float) -> str:
+    """Get severity level based on confidence score."""
+    if score >= 80.0:
+        return "CRITICAL"
+    elif score >= 60.0:
+        return "HIGH"
+    elif score >= 40.0:
+        return "MEDIUM"
+    else:
+        return "LOW"
 
 
 def mask_key(value: str) -> str:
@@ -319,25 +397,27 @@ class APIAuditor:
         if self.compiled_allow and self._matches_allow(combined):
             return True
 
-        if any(noise in lowered for noise in NOISE_SUBSTRINGS):
-            return False
-        if re.fullmatch(r"[A-Za-z]+", key):
-            return False
-        if re.search(r"(.)\1{8,}", key):
-            return False
-        if shannon_entropy(key) < 2.8:
-            return False
-        return True
+        is_noise = any(noise in lowered for noise in NOISE_SUBSTRINGS)
+        
+        # Calculate confidence score
+        confidence = calculate_confidence_score(key, context, is_noise)
+        
+        # Check against threshold
+        return confidence >= self.args.confidence_threshold
 
-    def extract_candidates(self, content: str, pattern: str) -> List[Tuple[str, str]]:
-        candidates: List[Tuple[str, str]] = []
+    def extract_candidates(self, content: str, pattern: str) -> List[Tuple[str, str, float, str]]:
+        candidates: List[Tuple[str, str, float, str]] = []
         for match in re.finditer(pattern, content):
             key = match.group(0)
             start = max(0, match.start() - 40)
             end = min(len(content), match.end() + 40)
             context = content[start:end]
             if self.is_probable_secret(key, context):
-                candidates.append((key, context))
+                combined = f"{key} {context}"
+                is_noise = any(noise in combined.lower() for noise in NOISE_SUBSTRINGS)
+                confidence = calculate_confidence_score(key, context, is_noise)
+                severity = get_severity_level(confidence)
+                candidates.append((key, context, confidence, severity))
         return candidates
 
     async def validate_openai_key(self, key: str) -> bool:
@@ -458,7 +538,7 @@ class APIAuditor:
             local_candidates = self.extract_candidates(content, pattern)
 
             async with self.lock:
-                for key, _context in local_candidates:
+                for key, _context, confidence, severity in local_candidates:
                     key_hash = fingerprint_key(key)
                     if self.progress.is_duplicate_hash(key_hash):
                         continue
@@ -470,6 +550,8 @@ class APIAuditor:
                         "path": path,
                         "url": item.get("html_url") or f"https://github.com/{repo}/blob/{path}",
                         "timestamp": safe_utc_now(),
+                        "confidence": round(confidence, 2),
+                        "severity": severity,
                         "valid": None,
                     }
                     if self.args.store_raw_keys:
@@ -548,7 +630,7 @@ class APIAuditor:
             local_candidates = self.extract_candidates(commit_msg, pattern)
 
             async with self.lock:
-                for key, _context in local_candidates:
+                for key, _context, confidence, severity in local_candidates:
                     key_hash = fingerprint_key(key)
                     if self.progress.is_duplicate_hash(key_hash):
                         continue
@@ -561,6 +643,8 @@ class APIAuditor:
                         "url": item.get("html_url") or f"https://github.com/{repo}/commit/{commit_sha}",
                         "message": commit_msg[:120],
                         "timestamp": safe_utc_now(),
+                        "confidence": round(confidence, 2),
+                        "severity": severity,
                         "valid": None,
                     }
                     if self.args.store_raw_keys:
@@ -668,6 +752,25 @@ def print_summary(auditor: APIAuditor) -> None:
             stats.get("validated_false", 0),
         )
     logger.info("-" * 60)
+    
+    # Severity breakdown
+    severity_counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    total_confidence = 0.0
+    for key_data in auditor.progress.found_keys:
+        severity = key_data.get("severity", "LOW")
+        if severity in severity_counts:
+            severity_counts[severity] += 1
+        total_confidence += key_data.get("confidence", 0.0)
+    
+    logger.info("Severity breakdown")
+    for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW"]:
+        if severity_counts[sev] > 0:
+            logger.info("  %-10s: %s", sev, severity_counts[sev])
+    
+    avg_confidence = total_confidence / len(auditor.progress.found_keys) if auditor.progress.found_keys else 0
+    logger.info("  Avg confidence: %.1f/100", avg_confidence)
+    
+    logger.info("-" * 60)
     logger.info("Top repos by findings")
     for repo, count in sorted(auditor.stats_by_repo.items(), key=lambda kv: kv[1], reverse=True)[:10]:
         logger.info("%-40s %s", repo, count)
@@ -703,12 +806,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resume", action="store_true", help="Resume from previous checkpoint")
     parser.add_argument("--checkpoint-file", type=str, default="progress.json", help="Checkpoint file path")
     parser.add_argument("--timeout", type=int, default=DEFAULT_VALIDATION_TIMEOUT, help="Validation timeout in seconds")
-    parser.add_argument("--providers", type=str, default="openai,anthropic", help="Providers (openai,anthropic,google)")
+    parser.add_argument("--providers", type=str, default="openai,anthropic", help="Providers (openai,anthropic,google,aws,stripe,github,slack,twilio,sendgrid)")
 
     parser.add_argument("--max-concurrency", type=int, default=DEFAULT_MAX_CONCURRENCY, help="Max concurrent item processors")
     parser.add_argument("--checkpoint-interval", type=int, default=DEFAULT_CHECKPOINT_INTERVAL, help="Save checkpoint every N processed items")
     parser.add_argument("--dry-run", action="store_true", help="Search only; do not fetch contents or export findings")
     parser.add_argument("--since-checkpoint", action="store_true", help="Only process items newer than checkpoint timestamp")
+    parser.add_argument("--confidence-threshold", type=float, default=DEFAULT_CONFIDENCE_THRESHOLD, help="Minimum confidence score (0-100) to report a key")
 
     parser.add_argument("--allow-patterns", type=str, default="", help="Comma-separated regex allow patterns")
     parser.add_argument("--deny-patterns", type=str, default="", help="Comma-separated regex deny patterns")
@@ -757,6 +861,12 @@ async def main() -> None:
             "anthropic": ("Anthropic", "sk-ant-", ANTHROPIC_KEY_PATTERN),
             "openai": ("OpenAI", "sk-", OPENAI_KEY_PATTERN),
             "google": ("Google", "AIza", GOOGLE_AI_KEY_PATTERN),
+            "aws": ("AWS", "AKIA", AWS_ACCESS_KEY_PATTERN),
+            "stripe": ("Stripe", "sk_", STRIPE_KEY_PATTERN),
+            "github": ("GitHub", "ghp_", GITHUB_TOKEN_PATTERN),
+            "slack": ("Slack", "xoxb-", SLACK_TOKEN_PATTERN),
+            "twilio": ("Twilio", "SK", TWILIO_API_KEY_PATTERN),
+            "sendgrid": ("SendGrid", "SG.", SENDGRID_API_KEY_PATTERN),
         }
         selected = [p.strip().lower() for p in args.providers.split(",") if p.strip()]
 

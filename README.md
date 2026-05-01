@@ -1,6 +1,6 @@
 # Exposed API Key Auditor
 
-Async Python CLI to scan GitHub code or commit messages for exposed API keys (OpenAI, Anthropic, Google AI), with resumable checkpoints, optional validation, and safer storage defaults.
+Async Python CLI to scan GitHub code or commit messages for exposed API keys (OpenAI, Anthropic, Google AI, AWS, Stripe, GitHub, Slack, Twilio, SendGrid), with resumable checkpoints, optional validation, safer storage defaults, and **confidence-based severity scoring**.
 
 ## Features
 
@@ -9,6 +9,13 @@ Async Python CLI to scan GitHub code or commit messages for exposed API keys (Op
   - OpenAI (`sk-...`, `sk-proj-...`, `sk-live-...`, `sk-test-...`)
   - Anthropic (`sk-ant-...`)
   - Google AI (`AIza...`)
+  - AWS (`AKIA...`)
+  - Stripe (`sk_live_...`, `sk_test_...`)
+  - GitHub (`ghp_...`, `gho_...`, `ghs_...`)
+  - Slack (`xoxb-...`, `xoxp-...`, `xoxa-...`, `xoxr-...`)
+  - Twilio (`SK...`)
+  - SendGrid (`SG.xxx.yyy`)
+- **Confidence-based severity scoring** (CRITICAL/HIGH/MEDIUM/LOW) with tunable threshold
 - Async + bounded concurrency for faster scans.
 - Checkpoint/resume support (`progress.json`).
 - Optional key validation:
@@ -17,10 +24,36 @@ Async Python CLI to scan GitHub code or commit messages for exposed API keys (Op
   - Google AI: no reliable lightweight validation endpoint
 - Context/noise filtering to reduce false positives.
 - Optional allow/deny regex filters.
-- Export to JSON/CSV/TXT.
+- Export to JSON/CSV/TXT with confidence and severity fields.
 - Optional encrypted output using Fernet.
 
-## Security model (important)
+## Confidence Scoring
+
+Each detected key is assigned a **confidence score (0-100)** based on multiple factors:
+
+- **Entropy** (30 pts): Randomness/complexity of the key
+- **Context patterns** (25 pts): Presence of keywords like `api_key`, `secret`, `token`
+- **Noise filter** (20 pts): Penalizes placeholder/example contexts
+- **Length** (15 pts): Longer keys score higher
+- **Character diversity** (10 pts): More unique characters = higher score
+
+Keys are categorized by severity:
+- **CRITICAL**: Score ≥ 80 (high-confidence production secrets)
+- **HIGH**: Score 60-79
+- **MEDIUM**: Score 40-59
+- **LOW**: Score < 40
+
+Use `--confidence-threshold` to set the minimum score to report (default: 50.0):
+
+```bash
+# Only report high-confidence findings
+python auditor.py --confidence-threshold 70
+
+# Lower threshold for broader catch (more false positives)
+python auditor.py --confidence-threshold 30 --dry-run
+```
+
+The summary report includes severity breakdown and average confidence score.
 
 By default, raw keys are **not** stored.
 
@@ -87,6 +120,18 @@ High-throughput scan:
 python auditor.py --max-concurrency 20 --checkpoint-interval 50
 ```
 
+Scan with confidence threshold (only report high-confidence findings):
+
+```bash
+python auditor.py --confidence-threshold 70 --providers openai,aws,stripe
+```
+
+Scan all available providers:
+
+```bash
+python auditor.py --providers openai,anthropic,google,aws,stripe,github,slack,twilio,sendgrid
+```
+
 ## Common commands
 
 Code mode with filters:
@@ -125,7 +170,7 @@ Core:
 
 - `--repo`: target repository (`owner/repo`), default global search.
 - `--mode`: `code` or `commits` (default `code`).
-- `--providers`: comma-separated providers (`openai,anthropic,google`).
+- `--providers`: comma-separated providers (`openai,anthropic,google,aws,stripe,github,slack,twilio,sendgrid`).
 - `--extensions`: comma-separated file extensions (code mode only).
 - `--validate`: validate found keys where supported.
 - `--output-format`: `json`, `csv`, `txt`.
@@ -143,8 +188,9 @@ Performance/UX:
 
 - `--max-concurrency`: concurrent item workers.
 - `--checkpoint-interval`: save progress every N processed items.
-- `--dry-run`: search only, no content processing/export.
-- `--since-checkpoint`: only process results newer than checkpoint timestamp.
+- `--dry-run`: search only; do not fetch contents or export findings.
+- `--since-checkpoint`: only process items newer than checkpoint timestamp.
+- `--confidence-threshold`: minimum confidence score (0-100) to report a key (default: 50.0).
 
 Security/filtering:
 
@@ -165,6 +211,34 @@ Security/filtering:
   - runtime logs (unless disabled)
 - Export file:
   - JSON/CSV/TXT or encrypted bytes if `--encrypt-output`
+
+## Docker
+
+Build the image:
+
+```bash
+docker build -t api-key-auditor .
+```
+
+Run with your `.env` file and persist outputs in `docker-output/`:
+
+```bash
+docker run --rm --env-file .env -v "${PWD}/docker-output:/work" api-key-auditor --dry-run --providers openai,anthropic,google
+```
+
+On Windows PowerShell, use:
+
+```powershell
+docker run --rm --env-file .env -v "${PWD}/docker-output:/work" api-key-auditor --dry-run --providers openai,anthropic,google
+```
+
+Or with Compose:
+
+```bash
+docker compose run --rm auditor --dry-run --providers openai,anthropic,google
+```
+
+Files such as `progress.json`, `audit.log`, and `audit_results.json` will be written under `docker-output/`.
 
 ## Testing
 
