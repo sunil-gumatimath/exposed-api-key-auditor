@@ -40,6 +40,11 @@ SLACK_TOKEN_PATTERN = r"\bxox[baprs]-[0-9]{10,13}-[0-9]{10,13}-[0-9a-zA-Z]{24,}\
 TWILIO_API_KEY_PATTERN = r"\bSK[0-9a-fA-F]{32}\b"
 SENDGRID_API_KEY_PATTERN = r"\bSG\.[0-9a-zA-Z\.\-_]{22}\.[0-9a-zA-Z\.\-_]{43}\b"
 
+HUGGINGFACE_KEY_PATTERN = r"\bhf_[a-zA-Z0-9]{34}\b"
+CLOUDFLARE_TOKEN_PATTERN = r"\b[A-Za-z0-9_-]{40}\b"
+SUPABASE_KEY_PATTERN = r"\bsbp_[a-zA-Z0-9]{36}\b"
+AZURE_CONNECTION_STRING_PATTERN = r"Endpoint=sb://[^;]+;SharedAccessKeyName=[^;]+;SharedAccessKey=[A-Za-z0-9+/=]+"
+
 DEFAULT_VALIDATION_TIMEOUT = 10
 DEFAULT_MAX_CONCURRENCY = 10
 DEFAULT_CHECKPOINT_INTERVAL = 25
