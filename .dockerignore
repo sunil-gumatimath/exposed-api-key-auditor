@@ -1,0 +1,16 @@
+.git
+.venv
+venv
+env
+__pycache__
+.pytest_cache
+*.pyc
+*.pyo
+*.pyd
+.env
+audit.log
+progress.json
+audit_results.json
+audit_results.csv
+audit_results.txt
+*.enc

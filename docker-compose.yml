@@ -1,0 +1,11 @@
+services:
+  auditor:
+    build: .
+    env_file:
+      - .env
+    environment:
+      # Set to 1 if you only want console logs.
+      GITHUB_AUDITOR_DISABLE_FILE_LOG: "0"
+    volumes:
+      # Persist checkpoint/results/logs on the host.
+      - ./docker-output:/work

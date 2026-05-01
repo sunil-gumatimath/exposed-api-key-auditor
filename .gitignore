@@ -28,3 +28,4 @@ audit_results.json
 audit_results.csv
 audit_results.txt
 audit.log
+docker-output/
