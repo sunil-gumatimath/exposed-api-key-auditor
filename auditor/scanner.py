@@ -57,14 +57,20 @@ class APIAuditor:
         self.session: aiohttp.ClientSession | None = None
         self.lock = asyncio.Lock()
         self.semaphore = asyncio.Semaphore(max(1, args.max_concurrency))
-        self.compiled_allow = (
-            [re.compile(p, re.IGNORECASE) for p in args.allow_patterns]
-            if args.allow_patterns
-            else []
-        )
-        self.compiled_deny = (
-            [re.compile(p, re.IGNORECASE) for p in args.deny_patterns] if args.deny_patterns else []
-        )
+        self.compiled_allow = []
+        if getattr(args, "allow_patterns", None):
+            for p in args.allow_patterns:
+                try:
+                    self.compiled_allow.append(re.compile(p, re.IGNORECASE))
+                except re.error as exc:
+                    logger.warning("Invalid allow pattern '%s' skipped: %s", p, exc)
+        self.compiled_deny = []
+        if getattr(args, "deny_patterns", None):
+            for p in args.deny_patterns:
+                try:
+                    self.compiled_deny.append(re.compile(p, re.IGNORECASE))
+                except re.error as exc:
+                    logger.warning("Invalid deny pattern '%s' skipped: %s", p, exc)
         self.stats_by_provider: dict[str, dict[str, int]] = {}
         self.stats_by_repo: dict[str, int] = {}
         self._provider_found_count: dict[str, int] = {}
@@ -167,7 +173,7 @@ class APIAuditor:
 
                     if response.status in {403, 429}:
                         # Prefer GitHub's Retry-After over blind exponential backoff.
-                        retry_after = resp_headers.get("Retry-After")
+                        retry_after = response.headers.get("Retry-After")
                         if retry_after:
                             try:
                                 wait_time = max(1, int(retry_after))
@@ -182,10 +188,12 @@ class APIAuditor:
                             wait_time,
                         )
                         await asyncio.sleep(wait_time)
-                        await self.rate_limiter.update_from_headers(resp_headers)
+                        if "/search/" in url:
+                            await self.rate_limiter.update_from_headers(resp_headers)
                         continue
 
-                    await self.rate_limiter.wait_if_needed(response.status, resp_headers)
+                    if "/search/" in url:
+                        await self.rate_limiter.wait_if_needed(response.status, resp_headers)
 
                     if response.status == 404:
                         return None
@@ -326,8 +334,10 @@ class APIAuditor:
         confidence = calculate_confidence_score(key, context, is_noise=False)
         return confidence >= self.args.confidence_threshold, confidence
 
-    def extract_candidates(self, content: str, pattern: str) -> list[tuple[str, str, float, str]]:
-        candidates: list[tuple[str, str, float, str]] = []
+    def extract_candidates(
+        self, content: str, pattern: str
+    ) -> list[tuple[str, str, float, str, int, int]]:
+        candidates: list[tuple[str, str, float, str, int, int]] = []
         # Cache compiled patterns to avoid re.compile on every file (P-LOW-01).
         compiled = _PATTERN_CACHE.get(pattern)
         if compiled is None:
@@ -345,7 +355,10 @@ class APIAuditor:
             is_probable, confidence = self.is_probable_secret(key, context)
             if is_probable:
                 severity = get_severity_level(confidence)
-                candidates.append((key, context, confidence, severity))
+                line_no = content[: match.start()].count("\n") + 1
+                last_nl = content.rfind("\n", 0, match.start())
+                col_no = match.start() - last_nl if last_nl != -1 else match.start() + 1
+                candidates.append((key, context, confidence, severity, line_no, col_no))
         return candidates
 
     # ------------------------------------------------------------------
@@ -495,7 +508,7 @@ class APIAuditor:
         ) -> None:
             repo = item["repository"]["full_name"]
             path = item["path"]
-            identifier = f"{repo}/{path}"
+            identifier = f"{provider}/{repo}/{path}"
 
             if not self._is_recent_enough(repo_updated_at=item["repository"].get("updated_at", "")):
                 return
@@ -513,7 +526,7 @@ class APIAuditor:
             local_candidates = self.extract_candidates(content, pattern)
 
             async with self.lock:
-                for key, _context, confidence, severity in local_candidates:
+                for key, _context, confidence, severity, line_no, col_no in local_candidates:
                     key_hash = fingerprint_key(key)
                     if self.progress.is_duplicate_hash(key_hash):
                         continue
@@ -524,6 +537,8 @@ class APIAuditor:
                         "repo": repo,
                         "path": path,
                         "url": item.get("html_url") or f"https://github.com/{repo}/blob/{path}",
+                        "line": line_no,
+                        "column": col_no,
                         "timestamp": safe_utc_now(),
                         "confidence": round(confidence, 2),
                         "severity": severity,
@@ -585,7 +600,7 @@ class APIAuditor:
             commit_date = item.get("commit", {}).get("author", {}).get("date", "") or item.get(
                 "commit", {}
             ).get("committer", {}).get("date", "")
-            identifier = f"{repo}/commit/{commit_sha}"
+            identifier = f"{provider}/{repo}/commit/{commit_sha}"
 
             if not self._is_recent_enough(
                 repo_updated_at=item["repository"].get("updated_at", ""),
@@ -600,7 +615,7 @@ class APIAuditor:
             local_candidates = self.extract_candidates(commit_msg, pattern)
 
             async with self.lock:
-                for key, _context, confidence, severity in local_candidates:
+                for key, _context, confidence, severity, line_no, col_no in local_candidates:
                     key_hash = fingerprint_key(key)
                     if self.progress.is_duplicate_hash(key_hash):
                         continue
@@ -613,6 +628,8 @@ class APIAuditor:
                         "url": item.get("html_url")
                         or f"https://github.com/{repo}/commit/{commit_sha}",
                         "message": commit_msg[:120],
+                        "line": line_no,
+                        "column": col_no,
                         "timestamp": safe_utc_now(),
                         "confidence": round(confidence, 2),
                         "severity": severity,
@@ -695,13 +712,14 @@ class APIAuditor:
             # Skip symlinks to avoid loops / out-of-scope reads.
             if file_path.is_symlink():
                 continue
-            # Skip hidden directories (e.g., .git, .venv), but NOT hidden files like .env
+            # Skip hidden directories (e.g., .git, .venv), but NOT .github or hidden files like .env
             parts = file_path.relative_to(dir_path).parts
-            if any(part.startswith(".") for part in parts[:-1]):
+            if any(part.startswith(".") and part != ".github" for part in parts[:-1]):
                 continue
             if file_path.suffix.lower() in skip_extensions:
                 continue
-            if allowed_extensions and file_path.suffix.lower() not in allowed_extensions:
+            file_ext = file_path.suffix.lower() or f".{file_path.name.lstrip('.')}"
+            if allowed_extensions and file_ext not in allowed_extensions:
                 continue
             # Skip very large files to avoid OOM.
             try:
@@ -735,7 +753,7 @@ class APIAuditor:
             local_candidates = self.extract_candidates(content, pattern)
 
             async with self.lock:
-                for key, _context, confidence, severity in local_candidates:
+                for key, _context, confidence, severity, line_no, col_no in local_candidates:
                     key_hash = fingerprint_key(key)
                     if self.progress.is_duplicate_hash(key_hash):
                         continue
@@ -746,6 +764,8 @@ class APIAuditor:
                         "repo": "local",
                         "path": str(file_path.relative_to(dir_path)),
                         "url": f"file://{file_path}",
+                        "line": line_no,
+                        "column": col_no,
                         "timestamp": safe_utc_now(),
                         "confidence": round(confidence, 2),
                         "severity": severity,
@@ -777,10 +797,12 @@ class APIAuditor:
             logger.error("Not a git repository: %s", directory)
             return
 
-        # Gather all commits via ``git log``
+        # Gather all commits via ``git log`` with security isolation
         try:
             process = await asyncio.create_subprocess_exec(
                 "git",
+                "-c", "core.fsmonitor=",
+                "-c", "diff.external=",
                 "log",
                 "--all",
                 "--format=%H%x00%an%x00%ae%x00%aI%x00%s",
@@ -800,9 +822,9 @@ class APIAuditor:
                 return
 
             if process.returncode != 0:
-                logger.error("git log failed: %s", stderr_bytes.decode("utf-8").strip())
+                logger.error("git log failed: %s", stderr_bytes.decode("utf-8", errors="replace").strip())
                 return
-            raw_log = stdout_bytes.decode("utf-8").strip()
+            raw_log = stdout_bytes.decode("utf-8", errors="replace").strip()
         except FileNotFoundError:
             logger.error("git executable not found on PATH")
             return
@@ -812,7 +834,7 @@ class APIAuditor:
             return
 
         commits: list[dict[str, str]] = []
-        for line in raw_log.split("\n"):
+        for line in raw_log.splitlines():
             parts = line.split("\x00", 4)
             if len(parts) == 5:
                 commits.append(
@@ -830,6 +852,9 @@ class APIAuditor:
             keys_to_validate: list[tuple[dict[str, Any], str]],
         ) -> None:
             sha = commit["sha"]
+            if not re.fullmatch(r"[0-9a-fA-F]{7,40}", sha):
+                logger.warning("Invalid commit SHA: %s", sha)
+                return
             identifier = f"{provider}/git-history/{sha}"
 
             async with self.lock:
@@ -839,9 +864,12 @@ class APIAuditor:
             try:
                 process = await asyncio.create_subprocess_exec(
                     "git",
+                    "-c", "core.fsmonitor=",
+                    "-c", "diff.external=",
                     "show",
-                    sha,
+                    "--no-ext-diff",
                     "--format=",
+                    sha,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=str(dir_path),
@@ -864,7 +892,7 @@ class APIAuditor:
             local_candidates = self.extract_candidates(diff_text, pattern)
 
             async with self.lock:
-                for key, _context, confidence, severity in local_candidates:
+                for key, _context, confidence, severity, line_no, col_no in local_candidates:
                     key_hash = fingerprint_key(key)
                     if self.progress.is_duplicate_hash(key_hash):
                         continue
@@ -879,6 +907,8 @@ class APIAuditor:
                         "author": commit["author"],
                         "date": commit["date"][:10],
                         "message": commit["subject"][:120],
+                        "line": line_no,
+                        "column": col_no,
                         "timestamp": safe_utc_now(),
                         "confidence": round(confidence, 2),
                         "severity": severity,

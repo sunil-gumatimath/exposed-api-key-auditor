@@ -61,6 +61,11 @@ class RateLimiter:
         while True:
             async with self._lock:
                 now = time.time()
+                # Reset tokens if reset_time has passed
+                if self._reset_time > 0 and now >= self._reset_time:
+                    self._remaining = SEARCH_QUOTA
+                    self._reset_time = 0.0
+
                 # Enforce minimum spacing between consecutive requests.
                 elapsed = now - self._last_request_time
                 if elapsed < MIN_REQUEST_INTERVAL:
@@ -79,7 +84,9 @@ class RateLimiter:
                 elif self._reset_time > now:
                     wait = self._reset_time - now + 1.0
                 else:
-                    wait = 3.0
+                    # If no reset time is known or expired, restore quota
+                    self._remaining = SEARCH_QUOTA
+                    wait = 0.1
             logger.debug(
                 "Rate-limit throttle: waiting %.1fs (tokens remaining=%s, min_interval=%ss)",
                 wait,
