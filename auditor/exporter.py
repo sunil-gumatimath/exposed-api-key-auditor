@@ -240,7 +240,12 @@ const keys = {keys_json};
 
 function escapeHtml(s) {{
   if (!s) return "&mdash;";
-  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  return String(s)
+    .replace(/&/g,"&amp;")
+    .replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;")
+    .replace(/'/g,"&#39;");
 }}
 
 function isSafeUrl(url) {{
@@ -369,6 +374,21 @@ def export_sarif_results(
                         "informationUri": "https://github.com/tedz/credsclaw",
                         "rules": [
                             {
+                                "id": f"credsclaw-{p.lower().replace(' ', '-')}",
+                                "name": f"{p.replace(' ', '')}KeyDetected",
+                                "shortDescription": {"text": f"Exposed {p} secret detected"},
+                                "fullDescription": {
+                                    "text": f"A potential {p} API key or credential was discovered."
+                                },
+                                "defaultConfiguration": {"level": "error"},
+                                "properties": {
+                                    "tags": ["security", "credential", "CWE-798"],
+                                },
+                            }
+                            for p in sorted({k["provider"] for k in progress.found_keys})
+                        ]
+                        or [
+                            {
                                 "id": "exposed-secret",
                                 "name": "ExposedSecret",
                                 "shortDescription": {"text": "Exposed API key or secret detected"},
@@ -382,7 +402,7 @@ def export_sarif_results(
                 },
                 "results": [
                     {
-                        "ruleId": "exposed-secret",
+                        "ruleId": f"credsclaw-{key_data['provider'].lower().replace(' ', '-')}",
                         "level": _severity_to_sarif_level(key_data.get("severity", "LOW")),
                         "message": {
                             "text": f"{key_data['provider']} key found in {key_data.get('path', 'unknown')}"
@@ -391,10 +411,15 @@ def export_sarif_results(
                             {
                                 "physicalLocation": {
                                     "artifactLocation": {
-                                        "uri": key_data.get("url", ""),
+                                        "uri": (
+                                            key_data.get("path", "").replace("\\", "/")
+                                            if key_data.get("path")
+                                            else key_data.get("url", "").replace("\\", "/")
+                                        ),
                                     },
                                     "region": {
-                                        "startLine": 1,
+                                        "startLine": max(1, key_data.get("line", 1)),
+                                        "startColumn": max(1, key_data.get("column", 1)),
                                     },
                                 }
                             }

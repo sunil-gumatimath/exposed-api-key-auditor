@@ -89,7 +89,7 @@ async def main() -> None:
             if not token:
                 raise ValueError("GitHub token is required")
 
-        if not args.resume and Path(args.checkpoint_file).exists():
+        if not args.resume and not args.since_checkpoint and Path(args.checkpoint_file).exists():
             logger.warning("Removing existing checkpoint file: %s", args.checkpoint_file)
             Path(args.checkpoint_file).unlink()
 
@@ -210,6 +210,31 @@ async def main() -> None:
         logger.info("Total unique keys found: %s", len(progress.found_keys))
         logger.info("Results file: %s", args.output_file)
         logger.info("Progress file: %s", args.checkpoint_file)
+
+        # CI / CD gatekeeper exit code handling
+        if not args.dry_run and progress.found_keys:
+            if getattr(args, "fail_on_findings", False):
+                logger.error(
+                    "CI gatekeeper: %s exposed key(s) detected — exiting with status 2",
+                    len(progress.found_keys),
+                )
+                sys.exit(2)
+            fail_severity = getattr(args, "fail_on_severity", "")
+            if fail_severity:
+                severity_ranks = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+                min_rank = severity_ranks.get(fail_severity.upper(), 1)
+                matching = [
+                    k
+                    for k in progress.found_keys
+                    if severity_ranks.get(str(k.get("severity", "LOW")).upper(), 1) >= min_rank
+                ]
+                if matching:
+                    logger.error(
+                        "CI gatekeeper: %s finding(s) with severity >= %s detected — exiting with status 2",
+                        len(matching),
+                        fail_severity,
+                    )
+                    sys.exit(2)
     except Exception as exc:
         logger.error("Unexpected error: %s", exc, exc_info=True)
         sys.exit(1)

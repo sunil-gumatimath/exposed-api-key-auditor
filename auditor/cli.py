@@ -21,8 +21,8 @@ repos:
     hooks:
       - id: credsclaw
         name: CredsClaw
-        description: Scans staged files for exposed API keys and secrets
-        entry: python -m auditor --mode local --dir . --confidence-threshold 60.0 --dry-run
+        description: Scans for exposed API keys and secrets before commit
+        entry: python -m auditor --mode local --dir . --confidence-threshold 60.0 --fail-on-findings
         language: system
         types: [text]
         pass_filenames: false
@@ -262,6 +262,18 @@ Examples:
     sec.add_argument(
         "--deny-patterns", type=str, default="", help="Comma-separated regex deny patterns"
     )
+    sec.add_argument(
+        "--fail-on-findings",
+        action="store_true",
+        help="Exit with code 2 if any exposed credentials meeting confidence threshold are found",
+    )
+    sec.add_argument(
+        "--fail-on-severity",
+        type=str,
+        choices=["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+        default="",
+        help="Exit with code 2 if findings meet or exceed this severity tier",
+    )
 
     # ── Utility ───────────────────────────────────────────────────────
     util = parser.add_argument_group("Utility")
@@ -325,4 +337,16 @@ def parse_args(argv: list[str] | None = None, config: dict | None = None) -> arg
             stacklevel=2,
         )
 
+    if args.encrypt_output:
+        enc_key = args.encryption_key or os.getenv("OUTPUT_ENCRYPTION_KEY", "")
+        if not enc_key:
+            parser.error(
+                "--encrypt-output requires --encryption-key or OUTPUT_ENCRYPTION_KEY environment variable"
+            )
+        try:
+            from cryptography.fernet import Fernet
+
+            Fernet(enc_key.encode("utf-8"))
+        except Exception as exc:
+            parser.error(f"Invalid encryption key for Fernet: {exc}")
     return args
