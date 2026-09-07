@@ -5,8 +5,8 @@
 # ---------------------------------------------------------------------------
 ANTHROPIC_KEY_PATTERN = r"\bsk-ant-(?:api\d{2}|oat\d{2}|admin|auth\d{2}|[A-Za-z0-9_-]+)-[A-Za-z0-9_-]{40,}\b"
 OPENAI_KEY_PATTERN = (
-    r"\b(?:sk-(?:proj|svcacct|admin|svc|session)-[A-Za-z0-9]{20,80}T3BlbkFJ"
-    r"[A-Za-z0-9]{20,80}|sk-[A-Za-z0-9_-]{48})\b"
+    r"\b(?:sk-(?:proj|svcacct|admin|svc|session)-[A-Za-z0-9_-]{20,80}T3BlbkFJ"
+    r"[A-Za-z0-9_-]{20,80}|sk-[A-Za-z0-9_-]{48,51})\b"
 )
 GOOGLE_AI_KEY_PATTERN = (
     r"\b(?:AIza[A-Za-z0-9_-]{35}|AQ\.[A-Za-z0-9_-]{35,}|ya29\.[A-Za-z0-9._\-/]{30,})\b"
@@ -28,9 +28,9 @@ HUGGINGFACE_KEY_PATTERN = r"\bhf_[A-Za-z0-9]{34,40}\b"
 CLOUDFLARE_TOKEN_PATTERN = r"\b(?:cfk_|cfut_|cfat_|cft_)[A-Za-z0-9_-]{30,50}[A-Fa-f0-9]{6,16}\b"
 AZURE_CONNECTION_STRING_PATTERN = (
     r"(?i)(?:Endpoint=sb://[^;]+;SharedAccessKeyName=[^;]+;"
-    r"SharedAccessKey=[A-Za-z0-9+/]+={0,2}|"
+    r"SharedAccessKey=[A-Za-z0-9+/]+={0,2}(?=[^A-Za-z0-9+/=]|$)|"
     r"DefaultEndpointsProtocol=https?;AccountName=[^;]+;"
-    r"AccountKey=[A-Za-z0-9+/]+={0,2})\b"
+    r"AccountKey=[A-Za-z0-9+/]+={0,2}(?=[^A-Za-z0-9+/=]|$))"
 )
 REPLICATE_API_TOKEN_PATTERN = r"\br8_[A-Za-z0-9]{37,40}\b"
 GROQ_API_KEY_PATTERN = r"\bgsk_[A-Za-z0-9_-]{30,64}\b"

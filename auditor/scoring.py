@@ -71,7 +71,7 @@ def calculate_confidence_score(key: str, context: str, is_noise: bool) -> float:
         diversity_score = 0.0
     else:
         raw_diversity = calculate_char_diversity(key)
-        diversity_score = min(raw_diversity, 0.7) * 10.0
+        diversity_score = min(raw_diversity / 0.7, 1.0) * 10.0
 
     score = entropy_score + context_score + noise_score + length_score + diversity_score
     return min(max(score, 0.0), 100.0)

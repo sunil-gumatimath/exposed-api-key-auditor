@@ -49,14 +49,14 @@ class ProgressTracker:
 
             # Backfill hashes from found_keys for backward compat with older checkpoints.
             for item in self.found_keys:
+                if not self.store_raw_keys:
+                    item.pop("key", None)
                 if item.get("key_hash"):
                     self.seen_hashes.add(item["key_hash"])
                 elif item.get("key"):
                     item["key_hash"] = fingerprint_key(item["key"])
                     item["key_masked"] = mask_key(item["key"])
                     self.seen_hashes.add(item["key_hash"])
-                    if not self.store_raw_keys:
-                        item.pop("key", None)
 
             logger.info(
                 "Resumed: %s items processed, %s keys found",

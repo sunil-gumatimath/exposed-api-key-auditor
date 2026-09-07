@@ -36,9 +36,10 @@ def _assert_allowed_url(url: str) -> None:
     from urllib.parse import urlparse
 
     host = urlparse(url).hostname or ""
-    assert host in ALLOWED_VALIDATION_HOSTS, f"Validation host not allowed: {host}"
-    assert url.startswith("https://"), f"Validation URL must be https: {url}"
-
+    if host not in ALLOWED_VALIDATION_HOSTS:
+        raise ValueError(f"Validation host not allowed: {host}")
+    if not url.startswith("https://"):
+        raise ValueError(f"Validation URL must be https: {url}")
 
 def create_validator_session(
     no_ssl_verify: bool = False, timeout: int = 10
@@ -165,12 +166,21 @@ async def validate_github_key(
                     return None
                 if response.status == 200:
                     return True
-                if response.status in (401, 403):
+                if response.status == 401:
                     return False
-                if response.status == 429:
-                    return None
+                if response.status in (403, 429):
+                    remaining = response.headers.get("X-RateLimit-Remaining")
+                    if remaining == "0":
+                        return None
+                    try:
+                        data = await response.json()
+                        msg = str(data.get("message", "")).lower()
+                        if "rate limit" in msg:
+                            return None
+                    except Exception:
+                        pass
+                    return False
                 return None
-
         if session is not None:
             return await _do(session)
         async with create_validator_session(no_ssl_verify, timeout) as s:
@@ -189,6 +199,9 @@ async def validate_slack_key(
     no_ssl_verify: bool = False,
     session: aiohttp.ClientSession | None = None,
 ) -> bool | None:
+    if "hooks.slack.com" in key:
+        # Webhook URLs should not be tested against auth.test (treats them as bearer tokens)
+        return None
     try:
         url = "https://slack.com/api/auth.test"
         _assert_allowed_url(url)
@@ -368,7 +381,7 @@ async def validate_groq_key(
     session: aiohttp.ClientSession | None = None,
 ) -> bool | None:
     try:
-        url = "https://api.groq.com/v1/models"
+        url = "https://api.groq.com/openai/v1/models"
         _assert_allowed_url(url)
 
         async def _do(s: aiohttp.ClientSession) -> bool | None:
